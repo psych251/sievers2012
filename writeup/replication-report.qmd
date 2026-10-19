@@ -48,30 +48,55 @@ exclusion rule, and the key comparison.
 #| include: false
 library(tidyverse)
 library(jsonlite)
+library(afex)   # repeated-measures ANOVA with Greenhouse-Geisser correction, as in the original
 
 # Must match EXPERIMENT.id in experiment.js, and the --experiment you passed to the export.
 # Phase 2 runs under its own id, so its data never mix with Phase 1's.
-experiment_id        <- "framing-demo"
-experiment_id_phase2 <- "framing-demo-phase2"
+experiment_id        <- "sievers2012-pilot-a"
+experiment_id_phase2 <- "sievers2012-phase2"
 ```
 
 ```{r}
 #| label: original-study
 #| include: false
 # The original study's numbers, entered once and used by the power analysis, the Key
-# statistics table, and the side-by-side figures. Replace these with your original study's
-# values, and say in a comment exactly where in the paper each one comes from.
+# statistics table, and the side-by-side figures.
 #
-# Tversky & Kahneman (1981), Problem 1 (gain frame, N = 152): 72% chose the certain program,
-# 28% the risky one. Problem 2 (loss frame, N = 155): 22% certain, 78% risky. The paper
-# reports percentages, so the counts below are reconstructed from them.
+# Sievers et al. (2013), US experiment, main text "United States: Results": multiway ANOVA on
+# the slider positions, Emotion (5) x Slider (5) within subjects and Modality (music vs
+# movement) between subjects, N = 50 (25 per modality), Greenhouse-Geisser corrected df.
+# The key effect is the Emotion x Slider interaction. (The partial eta-squared of 0.23 in the
+# cross-cultural section pools the US and Kreung samples and is not used here.)
 original <- tibble(
-  condition = c("gain", "loss"),
-  n         = c(152, 155),
-  risky     = round(c(0.28 * 152, 0.78 * 155))
+  term = c("emotion:slider", "emotion", "condition", "condition:emotion", "condition:emotion:slider"),
+  df1  = c(4.81, 2.97, 1, 2.97, 4.81),
+  df2  = c(230.73, 142.44, 48, 142.44, 230.73),
+  F    = c(112.90, 185.56, 4.66, 0.97, 4.50),
+  pes  = c(0.70, 0.79, 0.09, 0.02, 0.09),
+  N    = 50
 )
-original_p_gain <- original$risky[original$condition == "gain"] / original$n[original$condition == "gain"]
-original_p_loss <- original$risky[original$condition == "loss"] / original$n[original$condition == "loss"]
+original_n   <- c(music = 25, movement = 25)
+original_key <- original |> filter(term == "emotion:slider")
+
+# Mean raw slider settings by emotion, music and movement pooled: SI Table S1, "United States
+# means". Slider names follow experiment.js: scale = consonance/smoothness, interval = step
+# size, updown = direction (probability of a downward step).
+original_means <- tribble(
+  ~slider,    ~angry, ~happy, ~peaceful, ~sad,  ~scared,
+  "bpm",      331.00, 280.12, 69.48,     53.74, 289.68,
+  "jitter",   53.70,  33.24,  11.30,     19.44, 58.22,
+  "scale",    8.00,   32.00,  32.34,     22.66, 10.08,
+  "interval", 67.92,  49.36,  23.66,     26.28, 52.28,
+  "updown",   76.94,  35.56,  38.34,     78.30, 51.12
+) |> pivot_longer(-slider, names_to = "emotion", values_to = "mean")
+
+# Slider ranges (same in the original and in experiment.js), for plotting on a common 0-1 scale.
+slider_ranges <- tibble(
+  slider = c("bpm", "jitter", "scale", "interval", "updown"),
+  lo     = c(30, 0, 0, 0, 0),
+  hi     = c(400, 99, 37, 100, 100),
+  label  = c("Rate (per minute)", "Jitter", "Consonance / smoothness", "Step size (big/small)", "Direction (down)")
+)
 ```
 
 ::: {.callout-note appearance="simple" icon="false"}
@@ -103,6 +128,14 @@ One row per study for the key comparison: the original, your Phase 1 replication
 #| label: analysis-functions
 #| code-summary: "Show the analysis code (shared by Phase 1 and Phase 2)"
 
+# How slider values are put on a common scale before the ANOVA. The paper does not say what it
+# did for the US-only ANOVA; it z-scored within each slider for the cross-cultural one.
+#   "z"     z-score within each slider, across participants, emotions and modalities
+#   "range" proportion of each slider's range (0-1)
+#   "raw"   raw slider units (bpm then dominates the Slider factor)
+# Set this to the rule in your preregistration.
+slider_scaling <- "z"
+
 # Load one phase's exported data and apply the exclusion rule. Returns NULL if that phase
 # has not been exported yet, which is how every section below knows to skip itself.
 read_phase <- function(id) {
@@ -115,68 +148,110 @@ read_phase <- function(id) {
 
   complete <- participants |> filter(completed)
 
-  # Exclusion rule: replace with the rule you preregistered. Here: at least 6 of 8
-  # lexical-decision trials correct, and at least one speeded response at all (a session in
-  # which every speeded trial timed out is what a device without a keyboard produces).
-  ld <- trials |>
-    filter(task == "lexical_decision") |>
-    group_by(participant_id) |>
-    summarise(ld_acc           = mean(as.logical(correct), na.rm = TRUE),
-              ld_all_timed_out = all(as.logical(timed_out)),
-              .groups = "drop")
-  checked <- complete |> left_join(ld, by = "participant_id")
-  keep <- checked |> filter(!is.na(ld_acc), !ld_all_timed_out, ld_acc >= 0.75)
+  # Exclusion rule: replace with the rule you preregistered. Here: music-group participants
+  # who failed the sound check (fewer than 2 of 3 note counts correct, after up to 3 rounds).
+  # Completing the study already guarantees a saved setting for all five emotions.
+  failed_sound <- if ("audio_check_passed" %in% names(complete)) {
+    complete$condition == "music" & as.logical(complete$audio_check_passed) %in% FALSE
+  } else {
+    rep(FALSE, nrow(complete))
+  }
+  keep <- complete[!failed_sound, ]
 
   list(participants = participants, trials = trials, errors = errors,
        complete = complete, keep = keep,
-       n_no_response = sum(checked$ld_all_timed_out %in% TRUE))
+       n_failed_sound_check = sum(failed_sound))
 }
 
-# The key comparison's raw counts: how many analysed participants chose the risky program
-# in each frame.
-risky_counts <- function(d) {
+# The dependent measure in long format: one row per participant x emotion x slider, for the
+# analysed participants.
+emotion_settings <- function(d) {
   d$trials |>
-    filter(task == "framing", participant_id %in% d$keep$participant_id) |>
-    group_by(condition) |>
-    summarise(risky = sum(choice == "risky"), n = n(), .groups = "drop")
+    filter(task == "emotion_setting", participant_id %in% d$keep$participant_id) |>
+    select(participant_id, condition, emotion, bpm, jitter, scale, interval, updown) |>
+    pivot_longer(c(bpm, jitter, scale, interval, updown), names_to = "slider", values_to = "value") |>
+    mutate(across(c(participant_id, condition, emotion, slider), as.character),
+           value = as.numeric(value))
 }
 
-# The key statistic: difference in the proportion choosing the risky program (loss minus
-# gain) with a 95% CI, and the uncorrected chi-square, which is the same test. NULL until
-# both frames have at least one analysed participant.
-diff_ci <- function(counts) {
-  loss <- counts[counts$condition == "loss", ]
-  gain <- counts[counts$condition == "gain", ]
-  if (nrow(loss) == 0 || nrow(gain) == 0) return(NULL)
-  pt <- prop.test(c(loss$risky, gain$risky), c(loss$n, gain$n), correct = FALSE)
-  tibble(N = loss$n + gain$n,
-         estimate = unname(pt$estimate[1] - pt$estimate[2]),
-         ci_low = pt$conf.int[1], ci_high = pt$conf.int[2],
-         statistic = unname(pt$statistic), p = pt$p.value)
+scale_sliders <- function(settings, how = slider_scaling) {
+  settings |>
+    left_join(slider_ranges, by = "slider") |>
+    group_by(slider) |>
+    mutate(y = switch(how,
+                      z     = (value - mean(value)) / sd(value),
+                      range = (value - lo) / (hi - lo),
+                      raw   = value)) |>
+    ungroup()
 }
 
-# Side-by-side figure: any number of studies on the same axes, in the order given.
-prop_ci <- function(x, n) {
-  ci <- prop.test(x, n, correct = FALSE)$conf.int
-  tibble(p = x / n, low = ci[1], high = ci[2])
+# The key analysis: Emotion x Slider (within) x Modality (between) ANOVA, Greenhouse-Geisser
+# corrected, partial eta-squared, as in the original. Returns one row per term, or NULL until
+# each modality has at least two analysed participants with all 25 settings.
+key_anova <- function(settings) {
+  if (is.null(settings) || nrow(settings) == 0) return(NULL)
+  full <- settings |> filter(!is.na(value)) |> count(participant_id) |> filter(n == 25)
+  s <- settings |> filter(participant_id %in% full$participant_id)
+  per_group <- s |> distinct(participant_id, condition) |> count(condition)
+  if (nrow(per_group) < 2 || min(per_group$n) < 2) return(NULL)
+  s <- scale_sliders(s)
+  if (any(!is.finite(s$y))) return(NULL)  # a slider with no variance yet (tiny pilots)
+  fit <- suppressMessages(aov_ez(id = "participant_id", dv = "y", data = s,
+                                 within = c("emotion", "slider"), between = "condition",
+                                 anova_table = list(correction = "GG", es = "pes")))
+  tab <- as.data.frame(fit$anova_table)
+  tibble(term = rownames(tab), df1 = tab[["num Df"]], df2 = tab[["den Df"]],
+         F = tab[["F"]], pes = tab[["pes"]], p = tab[["Pr(>F)"]],
+         N = n_distinct(s$participant_id))
 }
+key_row <- function(tab) if (is.null(tab)) NULL else tab |> filter(term == "emotion:slider")
+
+# Confidence interval for partial eta-squared by inverting the noncentral F distribution
+# (Smithson, 2003). A 90% interval is conventional for eta-squared, since it is bounded at 0.
+pes_ci <- function(F, df1, df2, level = 0.90) {
+  a <- (1 - level) / 2
+  ncp_for <- function(target) {
+    g <- function(ncp) pf(F, df1, df2, ncp) - target
+    if (g(0) < 0) return(0)
+    uniroot(g, c(0, 10), extendInt = "downX")$root
+  }
+  ncp <- c(ncp_for(1 - a), ncp_for(a))
+  ncp / (ncp + df1 + df2 + 1)
+}
+
+# Mean setting per emotion x slider with a 95% CI, for the figures.
+settings_summary <- function(settings) {
+  if (is.null(settings) || nrow(settings) == 0) return(NULL)
+  settings |>
+    group_by(emotion, slider) |>
+    summarise(n = n(), mean = mean(value), se = sd(value) / sqrt(n), .groups = "drop") |>
+    mutate(low = mean - qt(0.975, pmax(n - 1, 1)) * se, high = mean + qt(0.975, pmax(n - 1, 1)) * se)
+}
+
+# Side-by-side figure: mean slider position for each emotion, as a proportion of each slider's
+# range, for any number of studies in the order given. Studies without CIs (the original
+# reports none) are drawn without error bars.
 comparison_plot <- function(...) {
   studies <- list(...)
   studies <- studies[!map_lgl(studies, ~ is.null(.x) || nrow(.x) == 0)]
   df <- imap_dfr(studies, ~ mutate(.x, Study = .y)) |>
-    rowwise() |> mutate(prop_ci(risky, n)) |> ungroup() |>
-    mutate(Study = factor(Study, levels = names(studies)), label = sprintf("n = %d", n))
+    left_join(slider_ranges, by = "slider") |>
+    mutate(across(any_of(c("mean", "low", "high")), ~ (.x - lo) / (hi - lo)),
+           Study = factor(Study, levels = names(studies)),
+           emotion = factor(emotion, levels = c("angry", "happy", "peaceful", "sad", "scared")),
+           label = factor(label, levels = slider_ranges$label))
+  if (!"low" %in% names(df)) df <- mutate(df, low = NA_real_, high = NA_real_)
   fills <- setNames(c("grey55", "#1E6E76", "#B8792A")[seq_along(studies)], names(studies))
   dodge <- position_dodge(width = 0.8)
-  ggplot(df, aes(x = condition, y = p, fill = Study)) +
+  ggplot(df, aes(x = emotion, y = mean, fill = Study)) +
     geom_col(position = dodge, width = 0.75) +
-    geom_errorbar(aes(ymin = low, ymax = high), position = dodge, width = 0.2) +
-    geom_text(aes(y = 0.02, label = label), position = dodge, vjust = 0, size = 3, colour = "white") +
-    scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+    geom_errorbar(aes(ymin = low, ymax = high), position = dodge, width = 0.2, na.rm = TRUE) +
+    facet_wrap(~ label, nrow = 1) +
+    scale_y_continuous(labels = scales::percent, limits = c(0, 1), oob = scales::squish) +
     scale_fill_manual(values = fills) +
-    labs(x = "Frame", y = "Chose the risky program", fill = NULL) +
-    theme_minimal(base_size = 12) +
-    theme(legend.position = "top")
+    labs(x = NULL, y = "Mean slider position (share of range)", fill = NULL) +
+    theme_minimal(base_size = 11) +
+    theme(legend.position = "top", axis.text.x = element_text(angle = 45, hjust = 1))
 }
 
 phase1 <- read_phase(experiment_id)
@@ -189,23 +264,25 @@ have_phase2 <- !is.null(phase2)
 #| label: key-stats
 #| echo: false
 fmt_row <- function(study, r) {
-  if (is.null(r)) {
-    return(tibble(Study = study, N = "", `Effect (loss − gain)` = "not yet collected",
-                  `95% CI` = "", `χ²(1)` = "", p = ""))
+  if (is.null(r) || nrow(r) == 0) {
+    return(tibble(Study = study, N = "", `Emotion × Slider` = "not yet collected",
+                  `partial η²` = "", `90% CI` = "", p = ""))
   }
+  ci <- pes_ci(r$F, r$df1, r$df2)
   tibble(Study = study, N = as.character(r$N),
-         `Effect (loss − gain)` = sprintf("%.0f points", 100 * r$estimate),
-         `95% CI` = sprintf("[%.0f, %.0f]", 100 * r$ci_low, 100 * r$ci_high),
-         `χ²(1)` = sprintf("%.2f", r$statistic),
-         p = format.pval(r$p, digits = 2, eps = 0.001))
+         `Emotion × Slider` = sprintf("F(%.2f, %.2f) = %.2f", r$df1, r$df2, r$F),
+         `partial η²` = sprintf("%.2f", r$pes),
+         `90% CI` = sprintf("[%.2f, %.2f]", ci[1], ci[2]),
+         p = format.pval(if ("p" %in% names(r)) r$p else pf(r$F, r$df1, r$df2, lower.tail = FALSE),
+                         digits = 2, eps = 0.001))
 }
 bind_rows(
-  fmt_row("Original", diff_ci(original)),
-  fmt_row("Phase 1: replication", if (have_data) diff_ci(risky_counts(phase1))),
-  fmt_row("Phase 2: extension", if (have_phase2) diff_ci(risky_counts(phase2)))
+  fmt_row("Original (US)", original_key),
+  fmt_row("Phase 1: replication", if (have_data) key_row(key_anova(emotion_settings(phase1)))),
+  fmt_row("Phase 2: extension", if (have_phase2) key_row(key_anova(emotion_settings(phase2))))
 ) |>
   knitr::kable(align = "lrlllr",
-               caption = "Key comparison: difference in the percentage of analysed participants choosing the risky program, loss frame minus gain frame.")
+               caption = "Key comparison: the Emotion × Slider interaction in the Emotion × Slider × Modality ANOVA on slider settings (Greenhouse-Geisser corrected).")
 ```
 
 # Phase 1: Replication
@@ -214,7 +291,7 @@ bind_rows(
 
 I'm interested in musical instruments as expressive tools—and how the various aspects of their design affects people's ability to express different intentions.
 
-Sievers et al. (2012) is a production experiment where a set of five features (rate, jitter, direction, step size, and dissonance/spikiness) are mapped to two different modalities: monophonic melodies and an animated ball. A participant is assigned a modality, and tunes the 5 parameters to generate content that match various emotions. Replicating study will be helpful for my research program in several ways—it's both a great example of how to study cross-modal mappings between music and movement, and will also have me implement a paradigm that could become reusable infrastructure for future studies.
+Sievers et al. (2012) is a production experiment where a set of five features (rate, jitter, direction, step size, and dissonance/spikiness) are mapped to two different modalities: monophonic melodies and an animated ball. A participant is assigned a modality, and tunes the 5 parameters to generate content that match various emotions. Replicating this study will be helpful for my research program in several ways—it's both a great example of how to study cross-modal mappings between music and movement, and will also have me implement a paradigm that could become reusable infrastructure for future studies.
 
 The authors reported three main results: (a) each emotion was mapped to a unique combination of features, (b) those features were similar for both music and movement, and (c) the common mappings of emotion to music and movement existed cross-culturally. I'm replicating the first of 2 experiments reported in the paper, which is the experiment conducted in the US. I'm aiming to replicate results (a) and (b), both of which come from running multiway ANOVA on the positions of the sliders for each modality and each emotion. The Emotion x Slider interaction is the primary result (original: partial η\^2 = 0.23, though this was pooled across populations, so I might recompute the US-only value from the dataset).
 
@@ -236,46 +313,59 @@ Original effects are usually overestimates, so powering to the original effect t
 
 ```{r}
 #| label: power
+# Power for the Emotion x Slider interaction, from the original partial eta-squared, using the
+# usual noncentral-F approximation for a within-subjects effect: f^2 = pes / (1 - pes),
+# noncentrality = f^2 x error df, with the original Greenhouse-Geisser epsilon
+# (4.81 / 16) applied to both df. Two modalities of equal size.
+eps_gg <- original_key$df1 / 16
+power_rm <- function(n_total, pes, eps = eps_gg) {
+  f2  <- pes / (1 - pes)
+  df1 <- 16 * eps
+  df2 <- (n_total - 2) * df1
+  1 - pf(qf(0.95, df1, df2), df1, df2, ncp = f2 * df2)
+}
+n_for_power <- function(target, pes) {
+  for (n in seq(4, 2000, by = 2)) if (power_rm(n, pes) >= target) return(n)
+  NA
+}
+
 power_rows <- map_dfr(c(0.80, 0.90, 0.95), function(pw) {
-  n <- power.prop.test(p1 = original_p_gain, p2 = original_p_loss,
-                       power = pw, sig.level = 0.05)$n
-  tibble(power = scales::percent(pw), n_per_group = ceiling(n), n_total = 2 * ceiling(n))
+  n <- n_for_power(pw, original_key$pes)
+  tibble(power = scales::percent(pw), n_per_group = n / 2, n_total = n)
 })
 
-original_effect <- original_p_loss - original_p_gain
-two_and_half <- ceiling(2.5 * original$n)
+two_and_half <- ceiling(2.5 * original_n)
 
-knitr::kable(power_rows, col.names = c("Power", "N per frame", "N total"),
+knitr::kable(power_rows, col.names = c("Power", "N per modality", "N total"),
              caption = sprintf(
-               "Sample needed to detect the original effect (risky choice: %.0f%% gain vs %.0f%% loss, a difference of %.0f points), two-sided alpha = .05.",
-               100 * original_p_gain, 100 * original_p_loss, 100 * original_effect))
+               "Sample needed to detect the original Emotion × Slider interaction (partial η² = %.2f), alpha = .05. The effect is very large, so this is not what limits the sample.",
+               original_key$pes))
 ```
 
 For comparison, 2.5 times the original sample would be `r two_and_half[1]` in the gain frame and `r two_and_half[2]` in the loss frame (`r sum(two_and_half)` in total).
 
 ### Planned sample
 
-::: {.callout-tip icon="false"}
-## Guidance
+I'm planning to sample from US residents on Prolific who are 18+ years old and fluent in English. (The original sample was from Dartmouth college students in a lab, with no other demographics reported.) The participants must be on desktop (not phone or tablet) and able to play audio from their computer.
 
-Planned sample size and stopping rule, sampling frame (for example, "US residents on Prolific, fluent in English, 18 or older"), known demographics, and any preselection or screening. The stopping rule should be data-independent: "collect until N participants pass the exclusion criteria below" rather than "until the result is clear".
-:::
+I'm planning to run 2.5x the original sample, which will be 126 participants total (63 people per modality). I will collect until 63 people in each modality pass the exclusion criteria.
 
 ### Materials
 
-::: {.callout-tip icon="false"}
-## Guidance
+The study is run using a computer program that generates both sound and visuals. I replicated the generators for both exactly. A summary is given in the original paper:\
+"We created a computer program capable of generating both music and movement; the former as simple, monophonic piano melodies, and the latter as an animated bouncing ball. Both were controlled by a single probabilistic model, ensuring there was an isomorphic relationship between the behavior of the music and the movement of the ball. This model represented both music and movement in terms of dynamic contour: how changes in the stimulus unfold over time. Our model for dynamic contour comprised five quantitative parameters controlled by on-screen slider bars. Stimuli were generated in real time, and manipulation of the slider bars resulted in immediate changes in the music being played or the animation being shown."
 
-All materials. You can quote the original article directly: put the text in quotation marks and note that it was followed precisely, or quote it and point out the exceptions. Link to the live experiment above rather than pasting screenshots of every screen.
-:::
+There are 5 on-screen slider that control the generation of either the visual or auditory clips, with the labels ("rate", "jitter", "consonance/smoothness", "step size", "direction") copied from the original paper.
+
+Each clip contains 16 events, where the music is monophonic MIDI piano (velocity=110), and movement is a red ellipsoid with eyes where bounce height follows interval size, tilt follows pitch (60 - MIDI note in degrees), and surface smoothness follows interval consonance.
+
+Emotion words are the original five clusters, anchored by "happy", "sad", "angry", "scared", and "peaceful." Audio is synthesized via the Salamander Grand Piano sample library, and the visuals are rendered via a three.js port of the original Processing code, copying the geometry, lighting, and camera position.
 
 ### Procedure
 
-::: {.callout-tip icon="false"}
-## Guidance
+After the user completes a consent form and audio/browser check, they are introduced to their assigned modality (either audio or visual/movement). They get unlimited time to practice with the interface, where the sliders are assigned to random values and are freely manipulable.
 
-As for Materials: quote the original where you can and point out the exceptions. Describe the sequence a participant experiences, from consent to debrief, and how long it takes.
-:::
+Then, they are introduced to the study task. There are 5 emotion categories. For each, the user can select it, edit the slider positions, and view/listen to the resulting clip. The user can re-play and re-edit the slider values at any point, and can return to each emotion as many times as they please. The user can do this in any order, and there is no time limit. The user must visit all 5 emotion categories before they finish with the study.
 
 ### Analysis plan
 
@@ -345,7 +435,7 @@ trials        <- phase1$trials
 errors        <- phase1$errors
 complete      <- phase1$complete
 keep          <- phase1$keep
-n_no_response <- phase1$n_no_response
+n_failed_sound_check <- phase1$n_failed_sound_check
 ```
 
 ```{r}
@@ -362,7 +452,7 @@ bind_rows(
   pivot_wider(names_from = condition, values_from = n, values_fill = 0) |>
   mutate(Total = rowSums(across(-step))) |>
   rename(Step = step) |>
-  knitr::kable(caption = "Participants at each step, by frame. Differences between frames in attrition or exclusion are a threat to validity and should be discussed.")
+  knitr::kable(caption = "Participants at each step, by modality. Differences between modalities in attrition or exclusion are a threat to validity and should be discussed.")
 ```
 
 ```{r}
@@ -372,9 +462,9 @@ bind_rows(
 #| results: asis
 cat(sprintf("Of %d participants who started, %d completed the study and %d met the exclusion criteria.",
             nrow(participants), nrow(complete), nrow(keep)))
-if (n_no_response > 0) {
-  cat(sprintf(" %d completed session(s) contained no response to any speeded trial and were excluded on that basis.",
-              n_no_response))
+if (n_failed_sound_check > 0) {
+  cat(sprintf(" %d completed session(s) in the music group failed the sound check and were excluded on that basis.",
+              n_failed_sound_check))
 }
 if (nrow(keep) == 0) cat(" No participants remain for analysis yet, so the results below are empty.")
 cat("\n")
@@ -424,21 +514,18 @@ Data preparation follows the analysis plan. Loading and exclusions are done by t
 ```{r}
 #| label: confirmatory
 #| eval: !expr have_data
-framing <- trials |>
-  filter(task == "framing", participant_id %in% keep$participant_id) |>
-  select(participant_id, condition, choice)
-risky <- risky_counts(phase1)
-tab <- table(Frame = framing$condition, Choice = framing$choice)
+settings <- emotion_settings(phase1)
+key_tab  <- key_anova(settings)
 
-if (all(dim(tab) == c(2, 2))) {
-  # No continuity correction, so this test and the effect-size interval below agree: the
-  # uncorrected 2 x 2 chi-square is the same test as the two-proportion comparison.
-  print(tab)
-  print(chisq.test(tab, correct = FALSE))
+if (!is.null(key_tab)) {
+  key_tab |>
+    mutate(across(c(df1, df2), ~ round(.x, 2)), F = round(F, 2), pes = round(pes, 3),
+           p = format.pval(p, digits = 2, eps = 0.001)) |>
+    knitr::kable(col.names = c("Term", "df1", "df2", "F", "partial η²", "p", "N"),
+                 caption = sprintf("Emotion × Slider × Modality ANOVA on slider settings (scaling: %s), Greenhouse-Geisser corrected. The key term is emotion:slider.", slider_scaling))
 } else {
-  message("Chi-square not run: the frame-by-choice table is ", paste(dim(tab), collapse = " x "),
-          ". It needs both frames and both choices; with ", nrow(framing),
-          " participant(s) in the analysis set this is expected.")
+  message("ANOVA not run: it needs at least two analysed participants in each modality with all ",
+          "25 settings; there are ", n_distinct(settings$participant_id), " analysed participant(s).")
 }
 ```
 
@@ -453,18 +540,19 @@ Judge the replication on effect sizes, not only on whether the key test is signi
 ```{r}
 #| label: comparison
 #| eval: !expr have_data
-orig <- diff_ci(original)
-rep  <- diff_ci(risky)
+orig <- original_key
+rep  <- key_row(key_tab)
 
 if (!is.null(rep)) {
-  bind_rows(orig |> mutate(Study = "Original"), rep |> mutate(Study = "Phase 1: replication")) |>
+  bind_rows(orig |> mutate(Study = "Original (US)"), rep |> mutate(Study = "Phase 1: replication")) |>
+    rowwise() |> mutate(ci = list(pes_ci(F, df1, df2))) |> ungroup() |>
     transmute(Study, N,
-              `Difference (loss − gain)` = sprintf("%.0f points", 100 * estimate),
-              `95% CI` = sprintf("[%.0f, %.0f]", 100 * ci_low, 100 * ci_high),
-              p = format.pval(p, digits = 2, eps = 0.001)) |>
-    knitr::kable(caption = "Effect size: difference in the percentage choosing the risky program.")
+              `Emotion × Slider` = sprintf("F(%.2f, %.2f) = %.2f", df1, df2, F),
+              `partial η²` = sprintf("%.2f", pes),
+              `90% CI` = map_chr(ci, ~ sprintf("[%.2f, %.2f]", .x[1], .x[2]))) |>
+    knitr::kable(caption = "Effect size of the key interaction, original and replication.")
 } else {
-  message("Replication effect size not computed yet: need at least one analysed participant in each frame.")
+  message("Replication effect size not computed yet: need at least two analysed participants in each modality.")
 }
 ```
 
@@ -474,13 +562,13 @@ if (!is.null(rep)) {
 #| echo: false
 #| results: asis
 if (!is.null(rep)) {
-  excludes_zero <- rep$ci_low > 0 | rep$ci_high < 0
-  includes_orig <- orig$estimate >= rep$ci_low & orig$estimate <= rep$ci_high
+  ci <- pes_ci(rep$F, rep$df1, rep$df2)
+  includes_orig <- orig$pes >= ci[1] & orig$pes <= ci[2]
   cat(sprintf(
-    "The replication's 95%% interval %s zero and %s the original estimate of %.0f points. ",
-    if (excludes_zero) "excludes" else "includes",
-    if (includes_orig) "includes" else "does not include",
-    100 * orig$estimate))
+    "The replication's Emotion × Slider interaction is %s (p %s), partial η² = %.2f, and its 90%% interval [%.2f, %.2f] %s the original estimate of %.2f. ",
+    if (rep$p < 0.05) "significant" else "not significant",
+    if (rep$p < 0.001) "< .001" else sprintf("= %.3f", rep$p),
+    rep$pes, ci[1], ci[2], if (includes_orig) "includes" else "does not include", orig$pes))
   cat("These two facts are the starting point for the summary in the Discussion, not the conclusion.\n")
 }
 ```
@@ -512,10 +600,10 @@ Whichever you choose, use the same measure, scale, condition order and error-bar
 ```{r}
 #| label: fig-comparison
 #| eval: !expr have_data
-#| fig-cap: "Percentage choosing the risky program in each frame, original study and Phase 1 replication. Error bars are 95% confidence intervals."
-#| fig-width: 7
+#| fig-cap: "Mean slider position for each emotion, as a share of each slider's range: original study (SI Table S1, music and movement pooled; no variability reported) and Phase 1 replication (95% confidence intervals)."
+#| fig-width: 11
 #| fig-height: 4
-comparison_plot(Original = original, `Phase 1: replication` = risky)
+comparison_plot(Original = original_means, `Phase 1: replication` = settings_summary(settings))
 ```
 
 ### Exploratory analyses
@@ -527,20 +615,27 @@ Any follow-up analyses (optional). Label them clearly as exploratory: they were 
 :::
 
 ```{r}
-#| label: exploratory-rt
+#| label: exploratory-crossmodal
 #| eval: !expr have_data
-ld <- trials |>
-  filter(task == "lexical_decision", participant_id %in% keep$participant_id) |>
-  mutate(correct = as.logical(correct), is_word = as.logical(is_word), rt = as.numeric(rt)) |>
-  filter(correct, !is.na(rt))
+# Exploratory: do the two modalities choose the same profile for each emotion? Correlation
+# across the 25 emotion x slider cells between the music group's and the movement group's
+# mean (scaled) settings.
+profiles <- if (nrow(settings) > 0) {
+  scale_sliders(settings) |>
+    group_by(condition, emotion, slider) |>
+    summarise(y = mean(y), .groups = "drop") |>
+    pivot_wider(names_from = condition, values_from = y)
+} else tibble()
 
-if (nrow(ld) > 0) {
-  ld |>
-    group_by(`Real word` = is_word) |>
-    summarise(`Mean RT (ms)` = round(mean(rt)), `SD (ms)` = round(sd(rt)), Trials = n(), .groups = "drop") |>
-    knitr::kable(caption = "Exploratory: lexical-decision response times, correct trials only.")
+if (all(c("music", "movement") %in% names(profiles)) && sum(complete.cases(profiles)) > 2) {
+  r <- cor(profiles$music, profiles$movement, use = "complete.obs")
+  message(sprintf("Exploratory: music-movement correlation of mean emotion profiles, r = %.2f (25 cells).", r))
+  profiles |>
+    mutate(across(c(music, movement), ~ round(.x, 2))) |>
+    arrange(emotion, slider) |>
+    knitr::kable(caption = sprintf("Exploratory: mean scaled setting (%s) by emotion, slider and modality.", slider_scaling))
 } else {
-  message("No correct lexical-decision trials with a response time yet.")
+  message("Need analysed participants in both modalities for the cross-modal comparison.")
 }
 ```
 
@@ -624,43 +719,24 @@ Justify the Phase 2 sample, and **state how you expect the estimate and its prec
 
 ```{r}
 #| label: phase2-power
-phase2_n_per_group <- 150   # planned analysed participants per condition in Phase 2
+phase2_n_per_group <- 150   # planned analysed participants per modality in Phase 2
 
-p1_counts <- if (have_data) risky_counts(phase1)
-p1_stats  <- if (have_data) diff_ci(p1_counts)
-basis <- if (!is.null(p1_stats)) {
-  list(gain = p1_counts$risky[p1_counts$condition == "gain"] / p1_counts$n[p1_counts$condition == "gain"],
-       loss = p1_counts$risky[p1_counts$condition == "loss"] / p1_counts$n[p1_counts$condition == "loss"],
-       source = "Phase 1")
-} else {
-  list(gain = original_p_gain, loss = original_p_loss, source = "the original study")
-}
-
-# Expected 95% CI half-width on the difference at n per condition.
-half_width <- function(n) 1.96 * sqrt(basis$gain * (1 - basis$gain) / n + basis$loss * (1 - basis$loss) / n)
-power_at <- function(n, p1, p2) {
-  tryCatch(power.prop.test(n = n, p1 = p1, p2 = p2, sig.level = 0.05)$power, error = function(e) NA)
-}
-
-rows <- tibble(
-  Study = c(if (!is.null(p1_stats)) "Phase 1 (actual)", "Phase 2 (planned)"),
-  `N analysed` = c(if (!is.null(p1_stats)) p1_stats$N, 2 * phase2_n_per_group),
-  `95% CI half-width` = c(if (!is.null(p1_stats)) sprintf("±%.0f points", 100 * (p1_stats$ci_high - p1_stats$ci_low) / 2),
-                          sprintf("±%.0f points (expected)", 100 * half_width(phase2_n_per_group)))
-)
-knitr::kable(rows, caption = sprintf("Precision of the key estimate, Phase 2 expected values based on %s.", basis$source))
+p1_stats <- if (have_data) key_row(key_anova(emotion_settings(phase1)))
+basis_pes <- if (!is.null(p1_stats)) p1_stats$pes else original_key$pes
+basis_src <- if (!is.null(p1_stats)) "Phase 1" else "the original study"
 
 tibble(
-  `Effect to detect` = c(sprintf("Original: %.0f points", 100 * (original_p_loss - original_p_gain)),
-                         if (!is.null(p1_stats)) sprintf("Phase 1: %.0f points", 100 * p1_stats$estimate),
-                         sprintf("Half the original: %.0f points", 50 * (original_p_loss - original_p_gain))),
+  `Effect to detect` = c(sprintf("Original: partial η² = %.2f", original_key$pes),
+                         if (!is.null(p1_stats)) sprintf("Phase 1: partial η² = %.2f", p1_stats$pes),
+                         sprintf("A tenth of the original: partial η² = %.2f", original_key$pes / 10)),
   `Power at planned N` = scales::percent(c(
-    power_at(phase2_n_per_group, original_p_gain, original_p_loss),
-    if (!is.null(p1_stats)) power_at(phase2_n_per_group, basis$gain, basis$loss),
-    power_at(phase2_n_per_group, original_p_gain, original_p_gain + (original_p_loss - original_p_gain) / 2)
+    power_rm(2 * phase2_n_per_group, original_key$pes),
+    if (!is.null(p1_stats)) power_rm(2 * phase2_n_per_group, p1_stats$pes),
+    power_rm(2 * phase2_n_per_group, original_key$pes / 10)
   ), accuracy = 1)
 ) |>
-  knitr::kable(caption = sprintf("Power of the Phase 2 key test at %d per condition, two-sided alpha = .05.", phase2_n_per_group))
+  knitr::kable(caption = sprintf("Power of the Phase 2 key test (Emotion × Slider) at %d per modality, alpha = .05; current basis: %s.",
+                                 phase2_n_per_group, basis_src))
 ```
 
 ## Analysis plan
@@ -693,27 +769,27 @@ if (!have_phase2) {
 ```{r}
 #| label: phase2-results
 #| eval: !expr have_phase2
-p2_counts <- risky_counts(phase2)
-p2_stats  <- diff_ci(p2_counts)
+p2_settings <- emotion_settings(phase2)
+p2_stats    <- key_row(key_anova(p2_settings))
 cat(sprintf("Phase 2: %d started, %d completed, %d analysed.\n",
             nrow(phase2$participants), nrow(phase2$complete), nrow(phase2$keep)))
 if (!is.null(p2_stats)) {
+  ci <- pes_ci(p2_stats$F, p2_stats$df1, p2_stats$df2)
   p_text <- if (p2_stats$p < 0.001) "p < .001" else sprintf("p = %.3f", p2_stats$p)
-  cat(sprintf("Key comparison: %.0f points [%.0f, %.0f], chi-square(1) = %.2f, %s.\n",
-              100 * p2_stats$estimate, 100 * p2_stats$ci_low, 100 * p2_stats$ci_high,
-              p2_stats$statistic, p_text))
+  cat(sprintf("Key comparison (Emotion × Slider): F(%.2f, %.2f) = %.2f, %s, partial eta-squared = %.2f [%.2f, %.2f].\n",
+              p2_stats$df1, p2_stats$df2, p2_stats$F, p_text, p2_stats$pes, ci[1], ci[2]))
 }
 ```
 
 ```{r}
 #| label: fig-phase2
 #| eval: !expr have_phase2
-#| fig-cap: "Percentage choosing the risky program in each frame: original study, Phase 1 replication, and Phase 2 extension. Error bars are 95% confidence intervals."
-#| fig-width: 8
+#| fig-cap: "Mean slider position for each emotion, as a share of each slider's range: original study, Phase 1 replication, and Phase 2 extension. Error bars are 95% confidence intervals (none reported for the original)."
+#| fig-width: 11
 #| fig-height: 4
-comparison_plot(Original = original,
-                `Phase 1: replication` = if (have_data) risky_counts(phase1),
-                `Phase 2: extension` = risky_counts(phase2))
+comparison_plot(Original = original_means,
+                `Phase 1: replication` = if (have_data) settings_summary(emotion_settings(phase1)),
+                `Phase 2: extension` = settings_summary(emotion_settings(phase2)))
 ```
 
 ## Discussion
