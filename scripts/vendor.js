@@ -17,6 +17,12 @@ const copies = [
   ["@jspsych/plugin-survey/css/survey.css", "plugin-survey.css"],
   ["@jspsych/plugin-survey-likert/dist/index.browser.min.js", "plugin-survey-likert.js"],
   ["@jspsych/plugin-survey-text/dist/index.browser.min.js", "plugin-survey-text.js"],
+  ["@jspsych/plugin-preload/dist/index.browser.min.js", "plugin-preload.js"],
+  ["@jspsych/plugin-call-function/dist/index.browser.min.js", "plugin-call-function.js"],
+  ["@jspsych/plugin-browser-check/dist/index.browser.min.js", "plugin-browser-check.js"],
+  // Sievers task: Tone.js (piano sampler) and three.js (ball renderer, ES module)
+  ["tone/build/Tone.js", "tone.js"],
+  ["three/build/three.module.min.js", "three.module.min.js"],
 ];
 
 const versions = {};

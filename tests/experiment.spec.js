@@ -14,41 +14,117 @@ const { test, expect, devices } = require("@playwright/test");
 
 const EMULATOR = process.env.EMULATOR === "1" || !!process.env.FIRESTORE_EMULATOR_HOST;
 const PROJECT = "demo-psych251";
-const EXPERIMENT_ID = "framing-demo";
+const EXPERIMENT_ID = "sievers2012-pilot-a";
 const FS = `http://localhost:8080/v1/projects/${PROJECT}/databases/(default)/documents`;
+const EMOTIONS = ["happy", "sad", "angry", "scared", "peaceful"];
+const SLIDER_KEYS = ["bpm", "jitter", "scale", "interval", "updown"];
 
-async function runThroughExperiment(page) {
+// Slider positions the robot clicks for each emotion (fraction of the track, per slider), in
+// the order it works through them; the first slider stays at the far right so sequences are
+// short (400 per minute).
+const ROBOT_PLAN = [
+  ["peaceful", [1, 0.05, 0.98, 0.2, 0.35]],
+  ["happy", [1, 0.2, 0.9, 0.6, 0.3]],
+  ["sad", [1, 0.1, 0.6, 0.1, 0.8]],
+  ["angry", [1, 0.6, 0.05, 0.8, 0.8]],
+  ["scared", [1, 0.7, 0.2, 0.6, 0.5]],
+];
+
+async function clickSlider(page, index, frac) {
+  const box = await page.locator(".ws").nth(index).boundingBox();
+  // keep clicks inside the track so frac 0 and 1 land on the end values
+  const x = box.x + Math.min(box.width - 1, Math.max(1, frac * box.width));
+  await page.mouse.click(x, box.y + box.height / 2);
+}
+
+async function sliderValues(page) {
+  const vals = await page.locator(".ws").evaluateAll((els) => els.map((e) => Number(e.getAttribute("aria-valuenow"))));
+  return Object.fromEntries(SLIDER_KEYS.map((k, i) => [k, vals[i]]));
+}
+
+// Plays the whole study. Returns what the robot did, for the assertions.
+// opts.stopBeforeFinish: stop on the debrief screen without clicking Finish.
+async function runThroughExperiment(page, opts = {}) {
+  const did = { audioChecks: [], saved: {} };
   // 1. consent
   await page.getByRole("button", { name: "I agree to participate" }).click();
-  // 2. instructions (two pages)
+  did.condition = await page.evaluate(() => window.__condition);
+  const music = did.condition === "music";
+  // 2-3. preload (music) and browser check run by themselves; 4. welcome (two pages)
   await page.locator("#jspsych-instructions-next").click();
   await page.locator("#jspsych-instructions-next").click();
-  // 3. demographics (SurveyJS)
+  // 5. demographics (SurveyJS)
   await page.locator('input[type="number"]').fill("34");
   await page.getByText("Woman", { exact: true }).click();
   // SurveyJS boolean switches render "Yes" twice once toggled; scope to the question.
   await page.locator('[data-name="native_english"]').getByText("Yes", { exact: true }).first().click();
   await page.locator('input[value="Continue"]').click();
-  // 4. framing
-  await page.getByRole("button", { name: "Program A" }).click();
-  // 5. lexical decision: one instructions page, then 8 trials
-  await page.locator("#jspsych-instructions-next").click();
-  for (let i = 0; i < 8; i++) {
-    const stim = page.locator(".stimulus");
-    await stim.waitFor({ state: "visible" });
-    const word = (await stim.textContent()).trim();
-    const realWords = ["TABLE", "GARDEN", "PLANET", "SILVER"];
-    await page.keyboard.press(realWords.includes(word) ? "f" : "j");
-    await stim.waitFor({ state: "detached" });
+  // 6. sound check (music group): volume page, intro, three note-count trials
+  if (music) {
+    await page.getByRole("button", { name: "Play test sound" }).click();
+    await page.getByRole("button", { name: "Continue" }).click();
+    await page.getByRole("button", { name: "Start" }).click();
+    for (let i = 0; i < 3; i++) {
+      const stim = page.locator(".audio-check");
+      await stim.waitFor({ state: "visible" });
+      await page.locator(".jspsych-btn:not([disabled])").first().waitFor();
+      const n = Number(await stim.getAttribute("data-n-notes"));
+      const answer = i === 0 ? (n === 5 ? 4 : n + 1) : n; // first answer deliberately wrong
+      did.audioChecks.push({ n, answer });
+      // consecutive trials reuse the class, so wait for this particular element to go away
+      const handle = await stim.elementHandle();
+      await page.getByRole("button", { name: String(answer), exact: true }).click();
+      await page.waitForFunction((el) => !el.isConnected, handle);
+    }
   }
-  // 6. feedback
+  // 7. program instructions (two pages)
+  await page.locator("#jspsych-instructions-next").click();
+  await page.locator("#jspsych-instructions-next").click();
+  // 8. slider task: practice, then the five emotions
+  const play = page.locator(".btn-play");
+  await play.waitFor();
+  await clickSlider(page, 0, 1);
+  await play.click();
+  await expect(play).toBeDisabled();
+  await expect(play).toBeEnabled({ timeout: 15000 });
+  await page.locator(".btn-start").click();
+  await page.locator(".task-modal .btn-primary").click(); // Begin
+  await expect(page.locator(".btn-finish")).toBeDisabled();
+  for (const [emotion, fracs] of ROBOT_PLAN) {
+    const card = page.locator(`.emo-card[data-emotion="${emotion}"]`);
+    await card.locator(".emo-syn").click();
+    await expect(card).toHaveClass(/is-focus/);
+    const save = page.locator(`.btn-save[data-emotion="${emotion}"]`);
+    await expect(save).toBeDisabled(); // not until a sequence has been played
+    for (let i = 0; i < fracs.length; i++) await clickSlider(page, i, fracs[i]);
+    await expect(play).toBeEnabled({ timeout: 15000 });
+    await play.click();
+    await expect(save).toBeEnabled();
+    did.saved[emotion] = await sliderValues(page);
+    await save.click();
+    await expect(card.locator(".emo-state")).toHaveText("Saved");
+    await expect(page.locator(`.btn-load[data-emotion="${emotion}"]`)).toBeEnabled();
+  }
+  await expect(page.locator(".btn-finish")).toBeEnabled();
+  await expect(play).toBeEnabled({ timeout: 15000 }); // let the last sequence finish, so all 6 are logged in full
+  await page.locator(".btn-finish").click();
+  await page.locator(".task-modal .btn-primary").click(); // confirm Finish
+  // 11. exploratory questions
+  await page.locator('[data-name="music_years"] input').fill("2");
+  await page.locator('[data-name="dance_years"] input').fill("0");
+  if (music) await page.locator('[data-name="audio_device"]').getByText("Headphones", { exact: true }).click();
+  await page.locator('input[value="Continue"]').click();
+  // 12. feedback
   await page.locator('input[name="Q0"][value="4"]').check();
   await page.locator("#jspsych-survey-likert-next").click();
   await page.locator("textarea").fill("Robot participant says hi.");
   await page.locator("#jspsych-survey-text-next").click();
-  // 7. debrief
+  // 13. debrief
+  await expect(page.getByRole("button", { name: "Finish" })).toBeVisible();
+  if (opts.stopBeforeFinish) return did;
   await page.getByRole("button", { name: "Finish" }).click();
   await expect(page.getByText("All done")).toBeVisible({ timeout: 30000 });
+  return did;
 }
 
 async function fsGet(path) {
@@ -76,65 +152,112 @@ function decodeFields(fields) {
   return out;
 }
 
+// Checks a completed run against the emulator: participant document, one chunk per trial,
+// the dependent measure, the sound check, and the process logs.
+async function checkSavedRun(page, did, expectedCondition) {
+  const uid = await page.evaluate(() => window.__saver.docId);
+  const stats = await page.evaluate(() => window.__saver.stats);
+  expect(stats.writes_failed).toBe(0);
+  await expect(page.locator("#data-saver-fallback")).toHaveCount(0);
+
+  // Participant document is complete and carries condition + Prolific ids.
+  const p = await fsGet(`experiments/${EXPERIMENT_ID}/participants/${uid}`);
+  expect(p.status).toBe(200);
+  const pdoc = decodeFields(p.body.fields);
+  expect(pdoc.completed).toBe(true);
+  expect(pdoc.condition).toBe(expectedCondition);
+  expect(pdoc.condition_source).toBe("url");
+  expect(pdoc.prolific_pid).toBe("robot123");
+  expect(pdoc.requires_keyboard).toBe(false);
+  expect(pdoc.n_trials).toBeGreaterThan(15);
+  expect(typeof pdoc.full_data).toBe("string");
+  const full = JSON.parse(pdoc.full_data);
+  expect(full.length).toBe(pdoc.n_trials);
+
+  // One chunk per trial (chunk_size = 1), each carrying the trial data.
+  const chunks = await fsGet(`experiments/${EXPERIMENT_ID}/participants/${uid}/trials?pageSize=500`);
+  expect(chunks.status).toBe(200);
+  const docs = (chunks.body.documents || []).map((d) => decodeFields(d.fields));
+  expect(docs.length).toBe(pdoc.n_trials);
+  const trials = docs.flatMap((d) => d.trials);
+  expect(trials.every((t) => t.condition === expectedCondition)).toBe(true);
+
+  // Dependent measure: one emotion_setting row per emotion, equal to what the robot saved.
+  const settings = trials.filter((t) => t.task === "emotion_setting");
+  expect(settings.map((t) => t.emotion).sort()).toEqual([...EMOTIONS].sort());
+  for (const row of settings) {
+    for (const k of SLIDER_KEYS) expect(row[k], `${row.emotion}.${k}`).toBe(did.saved[row.emotion][k]);
+    expect(row.n_saves).toBe(1);
+  }
+  // The robot's slider clicks span the ranges: far left and far right map to the end values.
+  expect(did.saved.peaceful.bpm).toBe(400);
+  expect(did.saved.angry.scale).toBeLessThanOrEqual(2);
+
+  const task = trials.find((t) => t.task === "slider_task");
+  expect(task.n_saves).toBe(5);
+  expect(task.n_sequences_practice).toBe(1);
+  expect(task.n_sequences_experiment).toBe(5);
+  expect(Object.keys(task.saved).sort()).toEqual([...EMOTIONS].sort());
+
+  // Process logs: every generated note is logged, 16 per sequence.
+  const logs = trials.filter((t) => t.task === "slider_log");
+  const logRows = (name) => logs.filter((l) => l.log === name).flatMap((l) => JSON.parse(l.rows_json));
+  expect(logRows("notes").length).toBe(16 * 6);
+  expect(logRows("saves").length).toBe(5);
+  expect(logRows("slider_samples").length).toBeGreaterThan(5);
+  const ui = logRows("ui_events").map((r) => r[2]);
+  expect(ui.filter((e) => e === "select").length).toBe(5);
+
+  // Sound check: music only; the robot answers the first trial wrong.
+  const checks = trials.filter((t) => t.task === "audio_check");
+  if (expectedCondition === "music") {
+    expect(checks.map((t) => t.correct)).toEqual([false, true, true]);
+    expect(checks.map((t) => t.choice)).toEqual(did.audioChecks.map((c) => c.answer));
+    expect(pdoc.audio_check_passed).toBe(true);
+    expect(trials.find((t) => t.task === "audio_setup").loaded).toBe(true);
+  } else {
+    expect(checks.length).toBe(0);
+    expect(trials.some((t) => t.task === "preload")).toBe(false);
+  }
+
+  const demo = trials.find((t) => t.task === "demographics");
+  expect(demo.response.age).toBe(34);
+  const expl = trials.find((t) => t.task === "exploratory");
+  expect(expl.response.music_years).toBe(2);
+
+  // Every trial row must carry the same participant id as its participant document,
+  // otherwise trials.csv and participants.csv cannot be joined in the analysis.
+  expect([...new Set(trials.map((t) => t.participant_id))]).toEqual([uid]);
+}
+
 test.describe("experiment", () => {
-  test("runs to the end and saves data", async ({ page }) => {
-    const consoleErrors = [];
-    page.on("pageerror", (e) => consoleErrors.push(String(e)));
+  for (const condition of ["music", "movement"]) {
+    test(`runs to the end and saves data (${condition})`, async ({ page }) => {
+      const consoleErrors = [];
+      page.on("pageerror", (e) => consoleErrors.push(String(e)));
 
-    await page.goto(EMULATOR ? "/?emulator=1&PROLIFIC_PID=robot123&STUDY_ID=s1&SESSION_ID=sess1" : "/");
-    await page.waitForFunction(() => window.__saver && window.__saver.uid);
-    const mode = await page.evaluate(() => window.__saver.mode);
-    expect(mode).toBe(EMULATOR ? "emulator" : "offline");
+      await page.goto(EMULATOR
+        ? `/?emulator=1&condition=${condition}&PROLIFIC_PID=robot123&STUDY_ID=s1&SESSION_ID=sess1`
+        : `/?condition=${condition}`);
+      await page.waitForFunction(() => window.__saver && window.__saver.uid);
+      const mode = await page.evaluate(() => window.__saver.mode);
+      expect(mode).toBe(EMULATOR ? "emulator" : "offline");
 
-    await runThroughExperiment(page);
+      const did = await runThroughExperiment(page);
+      expect(did.condition).toBe(condition);
 
-    // No uncaught errors from the experiment itself.
-    expect(consoleErrors, "uncaught page errors").toEqual([]);
+      // No uncaught errors from the experiment itself.
+      expect(consoleErrors, "uncaught page errors").toEqual([]);
 
-    const uid = await page.evaluate(() => window.__saver.docId);
-    const stats = await page.evaluate(() => window.__saver.stats);
-
-    if (!EMULATOR) {
-      // Offline: banner + download fallback, nothing else to check.
-      await expect(page.locator("#data-saver-banner")).toHaveAttribute("data-kind", "offline");
-      await expect(page.locator("#data-saver-fallback")).toBeVisible();
-      return;
-    }
-
-    expect(stats.writes_failed).toBe(0);
-    await expect(page.locator("#data-saver-fallback")).toHaveCount(0);
-
-    // Participant document is complete and carries condition + Prolific ids.
-    const p = await fsGet(`experiments/${EXPERIMENT_ID}/participants/${uid}`);
-    expect(p.status).toBe(200);
-    const pdoc = decodeFields(p.body.fields);
-    expect(pdoc.completed).toBe(true);
-    expect(["gain", "loss"]).toContain(pdoc.condition);
-    expect(pdoc.prolific_pid).toBe("robot123");
-    expect(pdoc.n_trials).toBeGreaterThan(10);
-    expect(typeof pdoc.full_data).toBe("string");
-    const full = JSON.parse(pdoc.full_data);
-    expect(full.length).toBe(pdoc.n_trials);
-
-    // One chunk per trial (chunk_size = 1), each carrying the trial data.
-    const chunks = await fsGet(`experiments/${EXPERIMENT_ID}/participants/${uid}/trials?pageSize=500`);
-    expect(chunks.status).toBe(200);
-    const docs = (chunks.body.documents || []).map((d) => decodeFields(d.fields));
-    expect(docs.length).toBe(pdoc.n_trials);
-    const trials = docs.flatMap((d) => d.trials);
-    const framing = trials.find((t) => t.task === "framing");
-    expect(framing.choice).toBe("certain");
-    expect(framing.condition).toBe(pdoc.condition);
-    const ld = trials.filter((t) => t.task === "lexical_decision");
-    expect(ld.length).toBe(8);
-    expect(ld.every((t) => t.correct === true)).toBe(true);
-    const demo = trials.find((t) => t.task === "demographics");
-    expect(demo.response.age).toBe(34);
-
-    // Every trial row must carry the same participant id as its participant document,
-    // otherwise trials.csv and participants.csv cannot be joined in the analysis.
-    expect([...new Set(trials.map((t) => t.participant_id))]).toEqual([uid]);
-  });
+      if (!EMULATOR) {
+        // Offline: banner + download fallback, nothing else to check.
+        await expect(page.locator("#data-saver-banner")).toHaveAttribute("data-kind", "offline");
+        await expect(page.locator("#data-saver-fallback")).toBeVisible();
+        return;
+      }
+      await checkSavedRun(page, did, condition);
+    });
+  }
 
   test("chunked writes (chunk_size > 1) save every trial", async ({ page }) => {
     test.skip(!EMULATOR, "needs the Firestore emulator");
@@ -164,20 +287,7 @@ test.describe("experiment", () => {
     // Run the real flow up to the last click, then cut the connection before "Finish".
     await page.goto("/?emulator=1");
     await page.waitForFunction(() => window.__saver && window.__saver.uid);
-    await page.getByRole("button", { name: "I agree to participate" }).click();
-    await page.locator("#jspsych-instructions-next").click();
-    await page.locator("#jspsych-instructions-next").click();
-    await page.locator('input[value="Continue"]').click();
-    await page.getByRole("button", { name: "Program B" }).click();
-    await page.locator("#jspsych-instructions-next").click();
-    for (let i = 0; i < 8; i++) {
-      const stim = page.locator(".stimulus");
-      await stim.waitFor({ state: "visible" });
-      await page.keyboard.press("f");
-      await stim.waitFor({ state: "detached" });
-    }
-    await page.locator("#jspsych-survey-likert-next").click();
-    await page.locator("#jspsych-survey-text-next").click();
+    await runThroughExperiment(page, { stopBeforeFinish: true });
     await context.setOffline(true);
     await page.getByRole("button", { name: "Finish" }).click();
     await expect(page.locator("#data-saver-fallback")).toBeVisible({ timeout: 40000 });

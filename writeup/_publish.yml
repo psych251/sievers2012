@@ -1,0 +1,4 @@
+- source: replication-report.qmd
+  posit-connect-cloud:
+    - id: 01a109f0-4666-f869-bddd-c2ce5903bee6
+      url: https://connect.posit.cloud/mcaren/content/01a109f0-4666-f869-bddd-c2ce5903bee6
