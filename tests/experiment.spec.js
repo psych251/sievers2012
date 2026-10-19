@@ -270,7 +270,11 @@ test.describe("experiment", () => {
     const docs = (chunks.body.documents || []).map((d) => decodeFields(d.fields));
     expect(docs.length).toBe(Math.ceil(p.n_trials / 5));
     const indices = docs.flatMap((d) => d.trials).map((t) => t.trial_index).sort((a, b) => a - b);
-    expect(indices).toEqual([...Array(p.n_trials).keys()]);
+    // Skipped conditional timelines (preload, sound check, audio-check retry) still use up a
+    // trial_index in jsPsych 8, so compare against jsPsych's own rows rather than 0..n-1.
+    const recorded = await page.evaluate(() => window.__saver.allTrials.map((t) => t.trial_index));
+    expect(recorded.length).toBe(p.n_trials);
+    expect(indices).toEqual(recorded.sort((a, b) => a - b));
   });
 
   test("declining consent ends the study without a thank-you-for-your-data message", async ({ page }) => {
