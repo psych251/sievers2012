@@ -113,6 +113,8 @@ slider_ranges <- tibble(
 | Tool and model | What it was used for | How you checked the output |
 |------------------------|------------------------|------------------------|
 | Claude Code (Claude Opus 5) | Debugged Java runtime installation. | `npm test` ran successfully, double-checked correct version via command line. |
+| Claude Code (Claude Opus 5) | Implemented the experiment based on the original paper's Methods section, and a writeup of my desired approach. | Ran automated tests, as well as an AI-generated test suite. Took the study myself, and confirmed that every screen matched the screenshots provided in the paper and SI. |
+| Claude Chat (Claude Opus 5) | Verified that I didn't misrepresent Phase 1 methods in this writeup—compared against code, and against original paper.  (No text generated.) | Read through the Claude-generated bullet points and decided which were worth acting on. No substantive edits made (though several typos caught!). |
 
 I wrote all of the text in this report myself. AI tools were not used to write, rewrite or paraphrase it, and were not used to generate, alter, or impute any participant data. I take full responsibility for the content of this report, including any errors introduced by AI tools.
 
@@ -363,9 +365,9 @@ Emotion words are the original five clusters, anchored by "happy", "sad", "angry
 
 ### Procedure
 
-After the user completes a consent form and audio/browser check, they are introduced to their assigned modality (either audio or visual/movement). They get unlimited time to practice with the interface, where the sliders are assigned to random values and are freely manipulable.
+After the user completes a consent form and audio/browser check, they are introduced to the interface in their assigned modality (either audio, or visual/movement). They get unlimited time to practice with the interface, where the sliders are initialized to random values and are freely manipulable.
 
-Then, they are introduced to the study task. There are 5 emotion categories. For each, the user can select it, edit the slider positions, and view/listen to the resulting clip. The user can re-play and re-edit the slider values at any point, and can return to each emotion as many times as they please. The user can do this in any order, and there is no time limit. The user must visit all 5 emotion categories before they finish with the study.
+Then, participants are introduced to the main study task. There are 5 emotion categories. For each, the user can select it, edit the slider positions, and view/listen to the resulting clip. The user can re-play and re-edit the slider values at any point, and can return to each emotion as many times as they please. The user can do this in any order, and there is no time limit. The user must visit all 5 emotion categories before they finish with the study.
 
 ### Analysis plan
 
@@ -377,26 +379,21 @@ The analysis strategy, as close to the original as possible: data cleaning rules
 **State the key analysis of interest explicitly.** That is the single test your replication stands or falls on, and it must match your preregistration. You can pre-specify additional analyses here too.
 :::
 
-**Key analysis of interest.** The proportion of participants choosing the risky program is higher in the loss frame than in the gain frame, tested with a chi-square test of independence on the 2 × 2 table of frame by choice. The effect size is the difference in the proportion choosing the risky program (loss minus gain), with a 95% confidence interval.
+**Key analysis of interest.** The DV being measured is the last value of each slider for each emotion category (which are saved as `emotion_setting` rows). ANOVA is run on Emotion (5) x Slider (5) x Modality (2). The key test is the Emotion x Slider interaction. The modality interactions are expected to be much smaller.
 
-**Exclusions.** Participants are excluded if they did not complete the study, if they answered no speeded trial at all (every lexical-decision trial timed out, the signature of a device without a keyboard), or if they answered fewer than 6 of the 8 lexical-decision trials correctly.
+**Exclusions.** Participants are excluded if they did not complete the sound check for the auditory condition, or if they did not complete the study (i.e. did not edit the sliders to create clips for all 5 emotion categories).
 
 ### Differences from the original study
 
-::: {.callout-tip icon="false"}
-## Guidance
-
-Every known difference in sample, setting, procedure, materials, and analysis, one per row. Minimizing differences is the goal, but some always remain. For each one, say whether it is expected to matter, based on claims in the original article or later research on when the effect does and does not appear. The rows below are the demo's real differences and show the level of detail expected; replace them with yours.
-:::
-
 | Aspect | Original study | This replication | Expected to matter? |
 |------------------|------------------|------------------|------------------|
-| Sample | University students in Stanford and British Columbia classrooms | Adults recruited on Prolific | Possibly. Framing effects have been found in both student and general samples, but their size varies across populations. |
-| Setting | Paper questionnaire in class | Online, unsupervised, on the participant's own computer | Unlikely for a single vignette, though attention may be lower online. |
-| Wording | "an unusual Asian disease" | "an unusual disease" | Unlikely. The ethnonym is incidental to the manipulation and dated. |
-| Design | Between subjects: each participant saw one frame | Between subjects, randomly assigned | No. |
-| Response | Circle a program on paper | Click a button | Unlikely. |
-| Other tasks | Problems presented alongside other questionnaire items | Followed by a short lexical-decision task used as an attention check | Unlikely: the check comes after the choice. |
+| Sample | University students in one lab at Dartmouth | Adults recruited on Prolific | Possibly. It's unclear how much the specific lab student population's behavior will generalize to the Prolific sample. |
+| Setting / instructions | Lab, live experimenter demo/presentation | Online, unsupervised, on the participant's own computer | Possibly. It's not known what the exact setting and contents of the live demo were (currently seeking more information from the original authors). |
+| Software | Max/MSP and Processing | tone.js and three.js | No, the behavior of the browser port of both the audio and the graphics was verified to be identical. |
+| Sound check | None | Added at the beginning of the study, participants with failed tests are excluded | No. In the original study, the researchers surely confirmed that the audio setup worked. |
+| Audio synthesis | GarageBand piano | Salamander samples | Extremely unlikely. They are both audio samples of a grand piano—pitch is identical, and timbral differences are minimal. |
+| UI appearance | Bare Max/MSP interface | JSPsych defaults, mild CSS styling | Unlikely. The colors of buttons/backgrounds, font, etc are unlikely to supersede the original result, which has a very large effect size. |
+| Save/finish rule | None (free save/load) | User must visit every category | Unlikely. On Prolific, some participants might be incentivised to finish as quickly as possible, and this requirement helps deter that. |
 
 ### Methods addendum (post data collection)
 
