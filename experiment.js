@@ -53,7 +53,7 @@ const EXPERIMENT = {
   save_full_data_at_end: true,
 
   // Prolific: if set, participants are redirected to Prolific when they finish.
-  prolific_completion_code: "",
+  prolific_completion_code: "CSIFIPSO",
 
   // Contact shown in consent and debrief.
   contact_email: "stanfordpsych251@gmail.com",

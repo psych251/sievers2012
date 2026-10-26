@@ -102,9 +102,9 @@ slider_ranges <- tibble(
 ::: {.callout-note appearance="simple" icon="false"}
 ## Project links
 
-- **Original paper:** Sievers, B., Polansky, L., Casey, M., & Wheatley, T. (2013). Music and movement share a dynamic structure that supports universal expressions of emotion. *Proceedings of the National Academy of Sciences, 110*(1), 70–75. https://doi.org/10.1073/pnas.1209023110
+- **Original paper:** Sievers, B., Polansky, L., Casey, M., & Wheatley, T. (2013). Music and movement share a dynamic structure that supports universal expressions of emotion. *Proceedings of the National Academy of Sciences, 110*(1), 70–75. <https://doi.org/10.1073/pnas.1209023110>
 - **Preregistration:** [OSF registration](https://osf.io/XXXXX) *(registered YYYY-MM-DD, before final data collection)*
-- **Live experiment:** <https://github.com/psych251/sievers2012> (take the study exactly as participants did)
+- **Live experiment:** <https://psych251.github.io/sievers2012/> (take the study exactly as participants did)
 - **Repository:** <https://github.com/psych251/sievers2012> (experiment code, data, and this report)
 :::
 
@@ -113,18 +113,12 @@ slider_ranges <- tibble(
 | Tool and model | What it was used for | How you checked the output |
 |------------------------|------------------------|------------------------|
 | Claude Code (Claude Opus 5) | Debugged Java runtime installation. | `npm test` ran successfully, double-checked correct version via command line. |
-| Claude Code (Claude Opus 5) | Implemented the experiment based on the original paper's Methods section, and a writeup of my desired approach. | Ran automated tests, as well as an AI-generated test suite. Took the study myself, and confirmed that every screen matched the screenshots provided in the paper and SI. |
-| Claude Chat (Claude Opus 5) | Verified that I didn't misrepresent Phase 1 methods in this writeup—compared against code, and against original paper.  (No text generated.) | Read through the Claude-generated bullet points and decided which were worth acting on. No substantive edits made (though several typos caught!). |
+| Claude Code (Claude Opus 5) | Implemented the experiment flow and draft analysis code based on the original paper's Methods section, and a writeup of my desired approach. | Ran automated tests, as well as an AI-generated test suite. Took the study myself, and confirmed that every screen matched the screenshots provided in the paper and SI. |
+| Claude Chat (Claude Opus 5) | Verified that I didn't misrepresent Phase 1 methods in this writeup—compared against code, and against original paper. (No text generated.) | Read through the Claude-generated bullet points and decided which were worth acting on. No substantive edits made (though several typos caught!). |
 
 I wrote all of the text in this report myself. AI tools were not used to write, rewrite or paraphrase it, and were not used to generate, alter, or impute any participant data. I take full responsibility for the content of this report, including any errors introduced by AI tools.
 
 # Key statistics
-
-::: {.callout-tip icon="false"}
-## Guidance
-
-One row per study for the key comparison: the original, your Phase 1 replication, and your Phase 2 extension. The table fills itself in from the data as each phase is exported, using the analysis code below (open "Show the analysis code"), which is shared by both phases so they are analysed identically. Edit that code once, here, to match your design and preregistered exclusion rule. On the scientific-extension track, the Phase 2 row reports the new comparison: adapt its code and say so in the caption.
-:::
 
 ```{r}
 #| label: analysis-functions
@@ -305,14 +299,6 @@ The extensions I'm considering are: (i) removing the descriptive natural-languag
 
 ### Power analysis
 
-::: {.callout-tip icon="false"}
-## Guidance
-
-Report the original effect size, the sample needed for 80%, 90% and 95% power to detect it, and the sample you chose and why. The table below is computed from the original study's numbers entered at the top of this file.
-
-Original effects are usually overestimates, so powering to the original effect tends to produce an underpowered replication. One widely used alternative is to collect 2.5 times the original sample, which gives 80% power to detect an effect the original study had only 33% power to detect (Simonsohn, 2015; Experimentology §10.4). Say which approach you used, and what the course's participant budget allowed.
-:::
-
 ```{r}
 #| label: power
 # Power for the Emotion x Slider interaction, from the original partial eta-squared, using the
@@ -370,14 +356,6 @@ After the user completes a consent form and audio/browser check, they are introd
 Then, participants are introduced to the main study task. There are 5 emotion categories. For each, the user can select it, edit the slider positions, and view/listen to the resulting clip. The user can re-play and re-edit the slider values at any point, and can return to each emotion as many times as they please. The user can do this in any order, and there is no time limit. The user must visit all 5 emotion categories before they finish with the study.
 
 ### Analysis plan
-
-::: {.callout-tip icon="false"}
-## Guidance
-
-The analysis strategy, as close to the original as possible: data cleaning rules, exclusion rules, covariates, and the model or test. Original papers often do not spell this out; say where you had to make a choice and what you chose.
-
-**State the key analysis of interest explicitly.** That is the single test your replication stands or falls on, and it must match your preregistration. You can pre-specify additional analyses here too.
-:::
 
 **Key analysis of interest.** The DV being measured is the last value of each slider for each emotion category (which are saved as `emotion_setting` rows). ANOVA is run on Emotion (5) x Slider (5) x Modality (2). The key test is the Emotion x Slider interaction. The modality interactions are expected to be much smaller.
 
