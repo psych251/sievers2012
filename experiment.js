@@ -43,7 +43,7 @@ window.TEMPLATE_VERSION = "0.1.0";
 const EXPERIMENT = {
   // Firestore path: experiments/<id>/participants/... Change it for each phase so pilot data
   // and real data never mix (e.g. "sievers2012-pilot-b", "sievers2012-final").
-  id: "sievers2012-pilot-a",
+  id: "sievers2012-pilot-b",
 
   // Trials per Firestore write. About 30 rows per participant, so 1 is fine.
   chunk_size: 1,
