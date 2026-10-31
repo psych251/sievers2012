@@ -52,7 +52,7 @@ library(afex)   # repeated-measures ANOVA with Greenhouse-Geisser correction, as
 
 # Must match EXPERIMENT.id in experiment.js, and the --experiment you passed to the export.
 # Phase 2 runs under its own id, so its data never mix with Phase 1's.
-experiment_id        <- "sievers2012-pilot-a"
+experiment_id        <- "sievers2012-pilot-b"
 experiment_id_phase2 <- "sievers2012-phase2"
 ```
 
@@ -115,6 +115,8 @@ slider_ranges <- tibble(
 | Claude Code (Claude Opus 5) | Debugged Java runtime installation. | `npm test` ran successfully, double-checked correct version via command line. |
 | Claude Code (Claude Opus 5) | Implemented the experiment flow and draft analysis code based on the original paper's Methods section, and a writeup of my desired approach. | Ran automated tests, as well as an AI-generated test suite. Took the study myself, and confirmed that every screen matched the screenshots provided in the paper and SI. |
 | Claude Chat (Claude Opus 5) | Verified that I didn't misrepresent Phase 1 methods in this writeup—compared against code, and against original paper. (No text generated.) | Read through the Claude-generated bullet points and decided which were worth acting on. No substantive edits made (though several typos caught!). |
+| Claude Code (Claude Opus 5) | Edited data analysis code to correctly reject/filter out incomplete records. | Read through generated code, manually compared result to the full CSV of trials. |
+| Claude Code (Claude Opus 5) | Edited data analysis code to apply Greenhouse-Geisser correction at every sample size (so it's correct for pilots). | Manually read code, confirmed that behavior is the same for the full sample. |
 
 I wrote all of the text in this report myself. AI tools were not used to write, rewrite or paraphrase it, and were not used to generate, alter, or impute any participant data. I take full responsibility for the content of this report, including any errors introduced by AI tools.
 
@@ -194,11 +196,46 @@ key_anova <- function(settings) {
   if (any(!is.finite(s$y))) return(NULL)  # a slider with no variance yet (tiny pilots)
   fit <- suppressMessages(aov_ez(id = "participant_id", dv = "y", data = s,
                                  within = c("emotion", "slider"), between = "condition",
-                                 anova_table = list(correction = "GG", es = "pes")))
+                                 anova_table = list(correction = "none", es = "pes")))
   tab <- as.data.frame(fit$anova_table)
-  tibble(term = rownames(tab), df1 = tab[["num Df"]], df2 = tab[["den Df"]],
-         F = tab[["F"]], pes = tab[["pes"]], p = tab[["Pr(>F)"]],
+  # Greenhouse-Geisser correction applied here rather than by afex, which silently drops it
+  # when there are fewer participants than within cells (25).
+  eps <- gg_epsilons(s)
+  within_part <- sub("^condition:?", "", rownames(tab))
+  e <- ifelse(within_part == "", 1, eps[within_part])
+  df1 <- tab[["num Df"]] * e
+  df2 <- tab[["den Df"]] * e
+  tibble(term = rownames(tab), df1 = df1, df2 = df2,
+         F = tab[["F"]], pes = tab[["pes"]], p = pf(tab[["F"]], df1, df2, lower.tail = FALSE),
          N = n_distinct(s$participant_id))
+}
+
+# Greenhouse-Geisser epsilon for each within-subjects term (Box, 1954): from the pooled
+# within-modality covariance of the term's orthonormal contrasts. Unlike the multivariate route
+# afex takes, this is defined at any sample size.
+gg_epsilons <- function(s) {
+  emotions <- sort(unique(s$emotion))
+  sliders  <- sort(unique(s$slider))
+  wide <- s |>
+    mutate(cell = paste(match(emotion, emotions), match(slider, sliders))) |>
+    select(participant_id, condition, cell, y) |>
+    pivot_wider(names_from = cell, values_from = y)
+  # Columns emotion-major, slider fastest, to match kronecker(emotion, slider) below.
+  cells <- paste(rep(seq_along(emotions), each = length(sliders)), rep(seq_along(sliders), length(emotions)))
+  Y <- as.matrix(wide[, cells])
+  R <- Y - apply(Y, 2, function(col) ave(col, wide$condition))  # remove modality means
+  df_err <- nrow(Y) - n_distinct(wide$condition)
+  poly <- function(k) contr.poly(k)
+  flat <- function(k) matrix(1 / sqrt(k), k, 1)
+  contrasts <- list(
+    emotion          = kronecker(poly(length(emotions)), flat(length(sliders))),
+    slider           = kronecker(flat(length(emotions)), poly(length(sliders))),
+    `emotion:slider` = kronecker(poly(length(emotions)), poly(length(sliders)))
+  )
+  map_dbl(contrasts, function(C) {
+    S <- crossprod(R %*% C) / df_err
+    min(1, sum(diag(S))^2 / (ncol(C) * sum(S * S)))
+  })
 }
 key_row <- function(tab) if (is.null(tab)) NULL else tab |> filter(term == "emotion:slider")
 
@@ -332,11 +369,13 @@ knitr::kable(power_rows, col.names = c("Power", "N per modality", "N total"),
 
 For comparison, 2.5 times the original sample would be `r two_and_half[1]` in the gain frame and `r two_and_half[2]` in the loss frame (`r sum(two_and_half)` in total).
 
+Because the effect is so large, I expect that replicating the original sample should be more than enough to measure the effect.
+
 ### Planned sample
 
 I'm planning to sample from US residents on Prolific who are 18+ years old and fluent in English. (The original sample was from Dartmouth college students in a lab, with no other demographics reported.) The participants must be on desktop (not phone or tablet) and able to play audio from their computer.
 
-I'm planning to run 2.5x the original sample, which will be 126 participants total (63 people per modality). I will collect until 63 people in each modality pass the exclusion criteria.
+I'm planning to run the same N as the original sample, which will be 50 participants total. I will collect until 25 people in each modality pass the exclusion criteria.
 
 ### Materials
 
