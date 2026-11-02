@@ -52,7 +52,7 @@ library(afex)   # repeated-measures ANOVA with Greenhouse-Geisser correction, as
 
 # Must match EXPERIMENT.id in experiment.js, and the --experiment you passed to the export.
 # Phase 2 runs under its own id, so its data never mix with Phase 1's.
-experiment_id        <- "sievers2012-pilot-b"
+experiment_id        <- "sievers2012-final"
 experiment_id_phase2 <- "sievers2012-phase2"
 ```
 
