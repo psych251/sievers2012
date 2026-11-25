@@ -52,9 +52,10 @@ const ICON_CHECK = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" c
 const ICON_EMPTY = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.75" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2.6 2.2"/></svg>';
 
 class WebSlider {
-  constructor(parent, spec, label, onChange) {
+  constructor(parent, spec, label, onChange, onTouch = () => {}) {
     this.spec = spec;
     this.onChange = onChange;
+    this.onTouch = onTouch; // any click/drag or arrow key on the slider, even if the value stays the same
     const row = document.createElement('div');
     row.className = 'ws-row';
     const id = `ws-${spec.key}`;
@@ -85,6 +86,7 @@ class WebSlider {
       this.el.focus({ preventScroll: true });
       this.el.setPointerCapture(e.pointerId);
       this.dragging = true;
+      this.onTouch(this.spec.key);
       this.el.classList.add('dragging');
       this._set(this._valueFromEvent(e), true);
     });
@@ -106,6 +108,7 @@ class WebSlider {
       else if (e.key === 'End') v = max;
       if (v === null) return;
       e.preventDefault();
+      this.onTouch(this.spec.key);
       this._set(Math.max(this.spec.min, Math.min(max, v)), true);
     });
   }
@@ -152,6 +155,9 @@ export function makeTaskPlugin(jsPsychModule) {
       let phase = 'practice';
       let focus = null;              // emotion currently being worked on
       let playedSinceFocus = false;  // a sequence was started while `focus` was selected
+      // Phase 2 interaction check: a slider was clicked/dragged (or moved with the keyboard)
+      // while `focus` was selected. Load does not count. Save needs both this and a Play.
+      let touchedSinceFocus = false;
 
       // trial data (one row)
       const data = {
@@ -217,6 +223,11 @@ export function makeTaskPlugin(jsPsychModule) {
         sliders[spec.key] = new WebSlider($('.sliders'), spec, LABELS[cond][i], (key, v) => {
           if (engineRef.engine) engineRef.engine.setParam(key, v);
           if (phase === 'experiment') render();
+        }, () => {
+          if (phase !== 'experiment' || !focus || touchedSinceFocus) return;
+          touchedSinceFocus = true;
+          log('touch', focus);
+          render();
         });
       });
       const current = () => Object.fromEntries(SLIDERS.map((s) => [s.key, sliders[s.key].value]));
@@ -247,6 +258,7 @@ export function makeTaskPlugin(jsPsychModule) {
         if (focus === emo) return;
         focus = emo;
         playedSinceFocus = false;
+        touchedSinceFocus = false;
         log('select', emo);
         render();
       };
@@ -267,8 +279,11 @@ export function makeTaskPlugin(jsPsychModule) {
           if (saved && isFocus && !same(cur, saved)) state = 'Changed since saving';
           card.querySelector('.emo-state').textContent = state;
           const save = card.querySelector('.btn-save');
-          save.disabled = !(isFocus && playedSinceFocus);
-          save.title = !isFocus ? `Select ${emo.key} to work on it` : (!playedSinceFocus ? `Press play to ${verb} this setting first` : `Save this setting for ${emo.key}`);
+          save.disabled = !(isFocus && playedSinceFocus && touchedSinceFocus);
+          save.title = !isFocus ? `Select ${emo.key} to work on it`
+            : !touchedSinceFocus ? `Move at least one slider first`
+            : !playedSinceFocus ? `Press play to ${verb} this setting first`
+            : `Save this setting for ${emo.key}`;
           const load = card.querySelector('.btn-load');
           load.disabled = !saved;
           load.title = saved ? `Bring back the setting you saved for ${emo.key}` : 'Available after you save';
@@ -280,7 +295,9 @@ export function makeTaskPlugin(jsPsychModule) {
         if (!focus) help = 'Choose an emotion to work on.';
         else {
           const saved = data.saved[focus];
-          if (!playedSinceFocus) help = `Working on <b>${focus}</b>. Press play to ${verb} the current setting.`;
+          if (!playedSinceFocus && !touchedSinceFocus) help = `Working on <b>${focus}</b>. Move at least one slider and press play to ${verb} the setting.`;
+          else if (!touchedSinceFocus) help = `Working on <b>${focus}</b>. Move at least one slider before saving.`;
+          else if (!playedSinceFocus) help = `Working on <b>${focus}</b>. Press play to ${verb} the current setting.`;
           else if (saved && same(cur, saved)) help = `Saved <b>${focus}</b>. Choose another emotion, or keep adjusting.`;
           else help = `Adjust the sliders until it expresses <b>${focus}</b>, then click save.`;
         }
@@ -433,6 +450,7 @@ export function makeTaskPlugin(jsPsychModule) {
         data.n_saves = count('experiment', 'save');
         data.n_loads = count('experiment', 'load');
         data.n_selects = count('experiment', 'select');
+        data.n_touches = count('experiment', 'touch');
         data.practice_duration_ms = data.experiment_start_ms;
         data.experiment_duration_ms = data.finish_ms - data.experiment_start_ms;
         trial.on_logs(logs);
@@ -441,7 +459,7 @@ export function makeTaskPlugin(jsPsychModule) {
       };
 
       // test hook
-      window.__task = { engine, sliders, data, logs, setSlider: (k, v) => sliders[k]._set(v, true), end, state: () => ({ focus, playedSinceFocus }) };
+      window.__task = { engine, sliders, data, logs, setSlider: (k, v) => sliders[k]._set(v, true), end, state: () => ({ focus, playedSinceFocus, touchedSinceFocus }) };
     }
   }
   return SieversTaskPlugin;

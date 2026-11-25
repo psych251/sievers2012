@@ -16,6 +16,13 @@
  *   Exclusions:   not completed; music group only, failing the sound check (fewer than 2 of 3
  *                 note-count trials correct, after up to 3 rounds; `audio_check_passed`).
  *
+ * Phase 2 changes (see "Changes from Phase 1" in the report; everything else is Phase 1's):
+ *   - Save for an emotion unlocks only once, while that emotion is selected, the participant
+ *     has clicked Play AND touched at least one slider (Load does not count). Ui event "touch".
+ *   - Manipulation check near the end: 2 of the 5 saved settings, chosen at random, are played
+ *     back and the participant picks the emotion (task "manipulation_check"; participant doc
+ *     field `manipulation_check_n_correct`). Recorded only; not an exclusion rule.
+ *
  * Timeline
  *    1. consent              course-wide consent text
  *    2. preload              piano samples (music group only)
@@ -28,6 +35,7 @@
  *    9. emotion settings     5 rows, the dependent measure
  *   10. process logs         slider trace, interface events, generated notes (several rows)
  *   11. exploratory survey   music/dance training, listening device, strategy
+ *  11b. manipulation check   Phase 2: intro + 2 playback trials (src/check.js)
  *   12. feedback             Likert + free text (template)
  *   13. debrief              saves data, then shows thanks or redirects to Prolific
  *
@@ -43,7 +51,7 @@ window.TEMPLATE_VERSION = "0.1.0";
 const EXPERIMENT = {
   // Firestore path: experiments/<id>/participants/... Change it for each phase so pilot data
   // and real data never mix (e.g. "sievers2012-pilot-b", "sievers2012-final").
-  id: "sievers2012-final",
+  id: "sievers2012-phase2",
 
   // Trials per Firestore write. About 30 rows per participant, so 1 is fine.
   chunk_size: 1,
@@ -195,6 +203,8 @@ const FORCED_CONDITION = ["music", "movement"].includes(URL_PARAMS.get("conditio
   const { Piano, SAMPLE_URLS } = await import("./src/audio.js");
   const BallView = isMusic ? null : (await import("./src/ball.js")).BallView;
   const SieversTaskPlugin = makeTaskPlugin(jsPsychModule);
+  const { makeCheckPlugin } = await import("./src/check.js");
+  const PlaybackCheckPlugin = makeCheckPlugin(jsPsychModule);
   const piano = new Piano();
 
   // Any click or key press is a user gesture that may unlock audio (browsers start audio
@@ -558,6 +568,46 @@ const FORCED_CONDITION = ["music", "movement"].includes(URL_PARAMS.get("conditio
   };
 
   // -------------------------------------------------------------------------
+  // 11b. Manipulation check (Phase 2): play back 2 of the 5 saved settings, chosen at random,
+  // and ask which emotion each was saved for. All five are always saved (Finish requires it),
+  // so the two can be drawn now.
+  // -------------------------------------------------------------------------
+  const checkTargets = jsPsych.randomization.sampleWithoutReplacement(EMOTIONS.map((e) => e.key), 2);
+  const checkIntro = {
+    type: jsPsychHtmlButtonResponse,
+    stimulus: `<h2>One last task</h2>
+      <p>The program will now play back two of the settings you saved.</p>
+      <p>For each one, click <b>Play</b> to ${isMusic ? "hear the melody" : "see the ball move"}, then choose the emotion you saved it for.
+      You can play it again as many times as you like.</p>`,
+    choices: ["Continue"],
+    data: { task: "manipulation_check_intro" },
+  };
+  const checkTrial = {
+    type: PlaybackCheckPlugin,
+    condition: condition,
+    piano: () => piano,
+    ballFactory: (container) => new BallView(container),
+    target: jsPsych.timelineVariable("emotion"),
+    setting: () => (taskRow().saved || {})[jsPsych.evaluateTimelineVariable("emotion")],
+    prompt: () => `<p><b>Setting ${jsPsych.evaluateTimelineVariable("item")} of 2.</b> Click <b>Play</b> to ${isMusic ? "hear" : "see"} it.</p>
+      <p>Which emotion did you save this setting for?</p>`,
+    data: { task: "manipulation_check", check_item: jsPsych.timelineVariable("item") },
+  };
+  const manipulationCheck = {
+    timeline: [checkIntro, {
+      timeline: [checkTrial],
+      timeline_variables: checkTargets.map((emotion, i) => ({ emotion, item: i + 1 })),
+    }],
+    on_timeline_finish: () => {
+      const rows = jsPsych.data.get().filter({ task: "manipulation_check" }).values();
+      saver.updateParticipant({
+        manipulation_check_targets: checkTargets,
+        manipulation_check_n_correct: rows.filter((r) => r.correct).length,
+      });
+    },
+  };
+
+  // -------------------------------------------------------------------------
   // 12. Feedback (template)
   // -------------------------------------------------------------------------
   const feedback = {
@@ -606,6 +656,7 @@ const FORCED_CONDITION = ["music", "movement"].includes(URL_PARAMS.get("conditio
     emotionSettings,
     processLogs,
     exploratory,
+    manipulationCheck,
     feedback,
     comments,
     debrief,

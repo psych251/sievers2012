@@ -474,3 +474,27 @@
 [hidden] {
     display: none !important;
 }
+/* ---------- Phase 2 playback check ---------- */
+.check-ctrl {
+    gap: 22px;
+}
+
+.check-prompt {
+    font-size: 17px;
+    line-height: 1.55;
+    color: var(--ink);
+}
+
+.check-prompt p {
+    margin: 0 0 0.6em;
+}
+
+.check-choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.check-choices .btn {
+    min-width: 92px;
+}

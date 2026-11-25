@@ -119,6 +119,7 @@ slider_ranges <- tibble(
 | Claude Code (Claude Opus 5) | Edited data analysis code to apply Greenhouse-Geisser correction at every sample size (so it's correct for pilots). | Manually read code, confirmed that behavior is the same for the full sample. |
 | Claude Code (Claude Opus 5) | Nit edit pass: check for misspellings and grammatical mistakes. | Went through every issue flagged, and changed the ones that I personally found to be incorrect or unintended. |
 | Claude Code (Claude Opus 5) | Robustness check: used the adversarial-protocol-review skill to make sure the code implemented the correct analyses, and match both what's in the original paper and what I wrote in my report. | Manually checked all issues flagged by the AI agent's review; used the agent as a tool to identify what to give special attention to rather than taking claims at face value. |
+| Claude Code (Claude Opus 5) | Implement the additional attention and interaction checks for Phase 2. | Ran automated tests and an AI-generated test suite. Took the study myself and confirmed in both conditions that the flow was correct. |
 
 I wrote all of the text in this report myself. AI tools were not used to write, rewrite or paraphrase it, and were not used to generate, alter, or impute any participant data. I take full responsibility for the content of this report, including any errors introduced by AI tools.
 
@@ -654,15 +655,10 @@ Although the Phase 1 replication was able to replicate the *existence* of the ef
 
 ## Changes from Phase 1
 
-::: {.callout-tip icon="false"}
-## Guidance
-
-Every change from the Phase 1 experiment, one per row, each tagged with a category: Measurement, Trials, Design, Checks, Instructions, Sample, Added condition (scientific track only), or Exploratory measure (end of study only). If it is not in this table, it does not change: same materials, wording, procedure, exclusion rule and analysis. The rows below are examples for the demo; replace them with yours.
-:::
-
 | \# | Category | Phase 1 | Phase 2 | Why |
 |---------------|---------------|---------------|---------------|---------------|
-| 1 | Check | Audio/sound check at beginning, no additional checks at end | Additional manipulation check at the end of the study: the interface randomly chooses 2 out of the 5 created sequences and plays it back to the participant. The participant must identify which emotion it corresponds to. | This should help identify participants who were skipping through the study paying little or no attention to the task—which I suspect may have been happening in Phase 1. |
+| 1 | Attention Check | Audio/sound check at beginning, no additional checks at end | Additional manipulation check at the end of the study: the interface randomly chooses 2 out of the 5 created sequences and plays it back to the participant. The participant must identify which emotion it corresponds to. | This should help identify participants who were skipping through the study paying little or no attention to the task—which I suspect may have been happening in Phase 1. |
+| 2 | Interaction Check | Participants must click "Play" before submitting their response for an emotion label. | Participants must also touch at least one slider as well as clicking "Play" to submit. | Slider positions are by default kept constant when people switch emotions, which might have led people to realize they can skip through the experiment by just pressing play repeatedly. |
 
 Everything not listed above is identical to Phase 1.
 
@@ -672,7 +668,7 @@ I'm happy with the power/sample size in Phase 1—and it resulted in a reasonabl
 
 ```{r}
 #| label: phase2-power
-phase2_n_per_group <- 150   # planned analysed participants per modality in Phase 2
+phase2_n_per_group <- 25   # planned analysed participants per modality in Phase 2
 
 p1_stats <- if (have_data) key_row(key_anova(emotion_settings(phase1)))
 basis_pes <- if (!is.null(p1_stats)) p1_stats$pes else original_key$pes

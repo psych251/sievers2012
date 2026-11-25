@@ -14,7 +14,7 @@ const { test, expect, devices } = require("@playwright/test");
 
 const EMULATOR = process.env.EMULATOR === "1" || !!process.env.FIRESTORE_EMULATOR_HOST;
 const PROJECT = "demo-psych251";
-const EXPERIMENT_ID = "sievers2012-final";
+const EXPERIMENT_ID = "sievers2012-phase2";
 const FS = `http://localhost:8080/v1/projects/${PROJECT}/databases/(default)/documents`;
 const EMOTIONS = ["happy", "sad", "angry", "scared", "peaceful"];
 const SLIDER_KEYS = ["bpm", "jitter", "scale", "interval", "updown"];
@@ -45,7 +45,7 @@ async function sliderValues(page) {
 // Plays the whole study. Returns what the robot did, for the assertions.
 // opts.stopBeforeFinish: stop on the debrief screen without clicking Finish.
 async function runThroughExperiment(page, opts = {}) {
-  const did = { audioChecks: [], saved: {} };
+  const did = { audioChecks: [], saved: {}, checks: [] };
   // 1. consent
   await page.getByRole("button", { name: "I agree to participate" }).click();
   did.condition = await page.evaluate(() => window.__condition);
@@ -90,15 +90,25 @@ async function runThroughExperiment(page, opts = {}) {
   await page.locator(".btn-start").click();
   await page.locator(".task-modal .btn-primary").click(); // Begin
   await expect(page.locator(".btn-finish")).toBeDisabled();
-  for (const [emotion, fracs] of ROBOT_PLAN) {
+  for (const [n, [emotion, fracs]] of ROBOT_PLAN.entries()) {
     const card = page.locator(`.emo-card[data-emotion="${emotion}"]`);
     await card.locator(".emo-syn").click();
     await expect(card).toHaveClass(/is-focus/);
     const save = page.locator(`.btn-save[data-emotion="${emotion}"]`);
-    await expect(save).toBeDisabled(); // not until a sequence has been played
-    for (let i = 0; i < fracs.length; i++) await clickSlider(page, i, fracs[i]);
-    await expect(play).toBeEnabled({ timeout: 15000 });
-    await play.click();
+    await expect(save).toBeDisabled(); // not until a sequence has been played and a slider touched
+    if (n === 0) {
+      // Phase 2: playing alone does not unlock Save; touching a slider is also required.
+      await expect(play).toBeEnabled({ timeout: 15000 });
+      await play.click();
+      await expect(play).toBeEnabled({ timeout: 15000 });
+      await expect(save).toBeDisabled();
+      for (let i = 0; i < fracs.length; i++) await clickSlider(page, i, fracs[i]);
+    } else {
+      for (let i = 0; i < fracs.length; i++) await clickSlider(page, i, fracs[i]);
+      await expect(save).toBeDisabled(); // touched but not yet played
+      await expect(play).toBeEnabled({ timeout: 15000 });
+      await play.click();
+    }
     await expect(save).toBeEnabled();
     did.saved[emotion] = await sliderValues(page);
     await save.click();
@@ -106,7 +116,14 @@ async function runThroughExperiment(page, opts = {}) {
     await expect(page.locator(`.btn-load[data-emotion="${emotion}"]`)).toBeEnabled();
   }
   await expect(page.locator(".btn-finish")).toBeEnabled();
-  await expect(play).toBeEnabled({ timeout: 15000 }); // let the last sequence finish, so all 6 are logged in full
+  // Phase 2: Load does not count as touching a slider. Select happy, play, then Load: Save stays locked.
+  await page.locator('.emo-card[data-emotion="happy"] .emo-syn').click();
+  await expect(play).toBeEnabled({ timeout: 15000 });
+  await play.click();
+  await page.locator('.btn-load[data-emotion="happy"]').click();
+  await expect(page.locator('.btn-save[data-emotion="happy"]')).toBeDisabled();
+  expect(await sliderValues(page)).toEqual(did.saved.happy);
+  await expect(play).toBeEnabled({ timeout: 15000 }); // let the last sequence finish, so all 7 are logged in full
   await page.locator(".btn-finish").click();
   await page.locator(".task-modal .btn-primary").click(); // confirm Finish
   // 11. exploratory questions
@@ -114,6 +131,22 @@ async function runThroughExperiment(page, opts = {}) {
   await page.locator('[data-name="dance_years"] input').fill("0");
   if (music) await page.locator('[data-name="audio_device"]').getByText("Headphones", { exact: true }).click();
   await page.locator('input[value="Continue"]').click();
+  // 11b. Phase 2 manipulation check: intro, then two playback trials (first answered wrong)
+  await page.getByRole("button", { name: "Continue" }).click();
+  for (let i = 0; i < 2; i++) {
+    const root = page.locator(".check-root");
+    await root.waitFor({ state: "visible" });
+    const target = await root.getAttribute("data-target");
+    const choices = root.locator(".btn-choice");
+    await expect(choices.first()).toBeDisabled(); // locked until the setting has played
+    await root.locator(".btn-play").click();
+    await expect(choices.first()).toBeEnabled({ timeout: 15000 });
+    const answer = i === 0 ? EMOTIONS.find((e) => e !== target) : target;
+    did.checks.push({ target, answer });
+    const handle = await root.elementHandle();
+    await root.locator(`.btn-choice[data-emotion="${answer}"]`).click();
+    await page.waitForFunction((el) => !el.isConnected, handle);
+  }
   // 12. feedback
   await page.locator('input[name="Q0"][value="4"]').check();
   await page.locator("#jspsych-survey-likert-next").click();
@@ -196,17 +229,34 @@ async function checkSavedRun(page, did, expectedCondition) {
   const task = trials.find((t) => t.task === "slider_task");
   expect(task.n_saves).toBe(5);
   expect(task.n_sequences_practice).toBe(1);
-  expect(task.n_sequences_experiment).toBe(5);
+  expect(task.n_sequences_experiment).toBe(6);
+  expect(task.n_loads).toBe(1);
+  expect(task.n_touches).toBe(5);
   expect(Object.keys(task.saved).sort()).toEqual([...EMOTIONS].sort());
 
   // Process logs: every generated note is logged, 16 per sequence.
   const logs = trials.filter((t) => t.task === "slider_log");
   const logRows = (name) => logs.filter((l) => l.log === name).flatMap((l) => JSON.parse(l.rows_json));
-  expect(logRows("notes").length).toBe(16 * 6);
+  expect(logRows("notes").length).toBe(16 * 7);
   expect(logRows("saves").length).toBe(5);
   expect(logRows("slider_samples").length).toBeGreaterThan(5);
   const ui = logRows("ui_events").map((r) => r[2]);
-  expect(ui.filter((e) => e === "select").length).toBe(5);
+  expect(ui.filter((e) => e === "select").length).toBe(6);
+  expect(ui.filter((e) => e === "touch").length).toBe(5);
+
+  // Phase 2 manipulation check: two different saved settings, played back as saved.
+  const mc = trials.filter((t) => t.task === "manipulation_check");
+  expect(mc.map((t) => t.target_emotion)).toEqual(did.checks.map((c) => c.target));
+  expect(new Set(mc.map((t) => t.target_emotion)).size).toBe(2);
+  expect(mc.map((t) => t.choice)).toEqual(did.checks.map((c) => c.answer));
+  expect(mc.map((t) => t.correct)).toEqual([false, true]);
+  for (const t of mc) {
+    for (const k of SLIDER_KEYS) expect(t[k]).toBe(did.saved[t.target_emotion][k]);
+    expect(t.n_plays).toBe(1);
+    expect(JSON.parse(t.notes_json).length).toBe(16);
+  }
+  expect(pdoc.manipulation_check_n_correct).toBe(1);
+  expect([...pdoc.manipulation_check_targets]).toEqual(did.checks.map((c) => c.target));
 
   // Sound check: music only; the robot answers the first trial wrong.
   const checks = trials.filter((t) => t.task === "audio_check");
