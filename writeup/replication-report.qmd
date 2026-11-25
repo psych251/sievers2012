@@ -111,7 +111,7 @@ slider_ranges <- tibble(
 # AI use statement
 
 | Tool and model | What it was used for | How you checked the output |
-|------------------------|------------------------|------------------------|
+|----|----|----|
 | Claude Code (Claude Opus 5) | Debugged Java runtime installation. | `npm test` ran successfully, double-checked correct version via command line. |
 | Claude Code (Claude Opus 5) | Implemented the experiment flow and draft analysis code based on the original paper's Methods section, and a writeup of my desired approach. | Ran automated tests, as well as an AI-generated test suite. Took the study myself, and confirmed that every screen matched the screenshots provided in the paper and SI. |
 | Claude Chat (Claude Opus 5) | Verified that I didn't misrepresent Phase 1 methods in this writeup—compared against code, and against original paper. (No text generated.) | Read through the Claude-generated bullet points and decided which were worth acting on. No substantive edits made (though several typos caught!). |
@@ -404,7 +404,7 @@ Then, participants are introduced to the main study task. There are 5 emotion ca
 ### Differences from the original study
 
 | Aspect | Original study | This replication | Expected to matter? |
-|------------------|------------------|------------------|------------------|
+|----|----|----|----|
 | Sample | University students (presumably from Dartmouth) | Adults recruited on Prolific | Possibly. It's unclear how much the specific lab student population's behavior will generalize to the Prolific sample. |
 | Setting / instructions | Lab, live experimenter demo/presentation | Online, unsupervised, on the participant's own computer | Possibly. It's not known what the exact setting and contents of the live demo were (currently seeking more information from the original authors). |
 | Software | Max/MSP and Processing | tone.js and three.js | No, the behavior of the browser port of both the audio and the graphics was verified to be identical. |
@@ -656,7 +656,7 @@ Although the Phase 1 replication was able to replicate the *existence* of the ef
 ## Changes from Phase 1
 
 | \# | Category | Phase 1 | Phase 2 | Why |
-|---------------|---------------|---------------|---------------|---------------|
+|----|----|----|----|----|
 | 1 | Attention Check | Audio/sound check at beginning, no additional checks at end | Additional manipulation check at the end of the study: the interface randomly chooses 2 out of the 5 created sequences and plays it back to the participant. The participant must identify which emotion it corresponds to. | This should help identify participants who were skipping through the study paying little or no attention to the task—which I suspect may have been happening in Phase 1. |
 | 2 | Interaction Check | Participants must click "Play" before submitting their response for an emotion label. | Participants must also touch at least one slider as well as clicking "Play" to submit. | Slider positions are by default kept constant when people switch emotions, which might have led people to realize they can skip through the experiment by just pressing play repeatedly. |
 
